@@ -1,15 +1,16 @@
 package main
 
 import (
+	"compress/gzip"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
 )
 
 func main() {
-
 	dir := flag.String("dir", ".", "The directory to serve files from (default is current directory)")
 	flag.Parse()
 
@@ -22,6 +23,8 @@ func main() {
 		fmt.Println("Failed to bind to port 8080")
 		os.Exit(1)
 	}
+
+	fmt.Println("Server listening on port 8080...")
 
 	for {
 		conn, err := ln.Accept()
@@ -81,7 +84,35 @@ func handleConnection(conn net.Conn, dir string) {
 			} else {
 				response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", len(data), data)
 			}
-			conn.Write([]byte(response))
+
+			// Check if client supports gzip compression
+			acceptsGzip := false
+			for _, line := range requestLines {
+				if strings.HasPrefix(line, "Accept-Encoding:") && strings.Contains(line, "gzip") {
+					acceptsGzip = true
+					break
+				}
+			}
+
+			if acceptsGzip {
+				// Compress response with gzip
+				gzipWriter := gzip.NewWriter(conn)
+				defer gzipWriter.Close()
+
+				// Write gzip headers
+				conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
+				conn.Write([]byte("Content-Encoding: gzip\r\n"))
+				conn.Write([]byte("\r\n"))
+
+				// Write compressed data
+				if _, err := io.WriteString(gzipWriter, response); err != nil {
+					fmt.Println("Error writing compressed response:", err.Error())
+				}
+			} else {
+				// Send uncompressed response
+				conn.Write([]byte(response))
+			}
+
 		} else if method == "POST" {
 			body := strings.Join(requestLines[len(requestLines)-1:], "\n")
 			err := os.WriteFile(filePath, []byte(body), 0644)
